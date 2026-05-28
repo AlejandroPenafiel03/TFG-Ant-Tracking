@@ -1,5 +1,5 @@
-# TFG-Ant-Tracking
-# 🐜 TFG – Detección y Seguimiento de Hormigas en Vídeo
+# 🐜 TFG – Desarrollo de un sistema de visión artificial
+para el estudio del comportamiento de hormigas
 
 Repositorio del Trabajo Fin de Grado de Alejandro Peñafiel Pujante.  
 Incluye scripts de detección, autoetiquetado, modificación de datasets, modelos entrenados y análisis estadístico.
@@ -28,7 +28,7 @@ R_analysis/
 └── bgsub_fine_tuning.Rmd
 
 TFG_Alejandro_Penafiel_Pujante.pdf
-
+```
 
 ---
 
