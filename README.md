@@ -1,4 +1,4 @@
-"# TFG-Ant-Tracking"
+# TFG-Ant-Tracking
 # 🐜 TFG – Detección y Seguimiento de Hormigas en Vídeo
 
 Repositorio del Trabajo Fin de Grado de Alejandro Peñafiel Pujante.  
@@ -7,25 +7,28 @@ Incluye scripts de detección, autoetiquetado, modificación de datasets, modelo
 ---
 
 ## 📂 Estructura del repositorio
-|- scripts/
-|   |- ant_detection/
-|   |   |- apply_bgsub_tracker.py
-|   |   |- bgsub_ant_tracker.py
-|   |
-|   |- autolabel/
-|   |   |- autolabel
-|   |   |- processor
-|   |
-|   |- dataset_modification/
-|       |- modify_dataset.py
-|
-|- models/
-|   |- ant_yolov8x.pt
-|
-|- R_analysis/
-|   |- bgsub_fine_tuning.Rmd
-|
-|- TFG_Alejandro_Penafiel_Pujante.pdf
+
+```text
+scripts/
+├── ant_detection/
+│   ├── apply_bgsub_tracker.py
+│   └── bgsub_ant_tracker.py
+│
+├── autolabel/
+│   ├── autolabel.py
+│   └── processor.py
+│
+└── dataset_modification/
+    └── modify_dataset.py
+
+models/
+└── ant_yolov8x.pt
+
+R_analysis/
+└── bgsub_fine_tuning.Rmd
+
+TFG_Alejandro_Penafiel_Pujante.pdf
+
 
 ---
 
