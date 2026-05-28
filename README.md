@@ -1,5 +1,4 @@
-# 🐜 TFG – Desarrollo de un sistema de visión artificial
-para el estudio del comportamiento de hormigas
+# 🐜 TFG – Desarrollo de un sistema de visión artificial para el estudio del comportamiento de hormigas
 
 Repositorio del Trabajo Fin de Grado de Alejandro Peñafiel Pujante.  
 Incluye scripts de detección, autoetiquetado, modificación de datasets, modelos entrenados y análisis estadístico.
