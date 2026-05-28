@@ -25,7 +25,11 @@ models/
 └── ant_yolov8x.pt
 
 R_analysis/
-└── bgsub_fine_tuning.Rmd
+├── bgsub_fine_tuning.Rmd
+├── ant_videos_labels.csv
+├── ant_videos_labels_white.csv
+├── grid_results_20260504_091637.csv
+└── grid_results_20260518_194907.csv
 
 TFG_Alejandro_Penafiel_Pujante.pdf
 ```
@@ -75,6 +79,8 @@ Modelo YOLOv8x entrenado para la **detección de hormigas en vídeos de alta cal
 ### **`bgsub_fine_tuning.Rmd`**
 Documento R Markdown con el **análisis estadístico** utilizado para seleccionar la mejor combinación de hiperparámetros del método de sustracción de fondo.
 
+### **`ficheros csv`**
+Ficheros csv con los datos utilizados en el análisis.
 ---
 
 ## 📄 Documento del TFG
