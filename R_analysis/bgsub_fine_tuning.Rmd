@@ -1,0 +1,710 @@
+---
+title: "Análisis pareado de diferencias por combinación"
+author: "Alejandro Peñafiel Pujante"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+# Análisis de filtro por sustracción de fondo
+
+En este documento analizaremos qué combinación de hiperparámetros supone un mejor rendimiento para el tracker de hormigas basado en sustracción de fondo.
+
+Los hiperparámetros evaluados son:
+
+-   min_area : [50, 100] El área mínima que deben tener los contornos en la máscara del sustractor de fondo para considerarse una detección.
+
+-   min_frames : [15,30] El número mínimo de frames que una misma detección debe vivir en el tiempo para considerarse como detección real y no una alucinación.
+
+-   var_threshold : [12, 18] La varianza aplicada al sustractor de fondo que marca el pixel como NO parte del fondo.
+
+-   history : [200, 500] El número de frames que considera el sustractor para estimar las distribuciones normales de los píxeles.
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.retina = 2)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(ggplot2)
+library(forcats)
+library(broom)
+library(gridExtra)
+library(knitr)
+
+```
+
+# Análisis sobre vídeos sin modificar
+
+Cargamos los datos. Son una mezcla de 38 vídeos nocturnos y diurnos.
+
+```{r}
+# Ajusta los nombres de archivo si hace falta
+labels_file   <- "ant_videos_labels.csv"                 # separador ;
+predict_file  <- "grid_results_20260504_091637.csv"     # separador ,
+
+# Leer archivos
+labels  <- read_delim(labels_file, delim = ";", col_types = cols())
+predict <- read_csv(predict_file, col_types = cols())
+
+# Normalizar nombres esperados (ajusta si tus archivos difieren)
+colnames(predict)[1:8] <- c("video","min_area","min_frames","var_threshold","history","up_count","down_count","num_detections")
+colnames(labels)[1:4]  <- c("video","up_count_target","down_count_target","num_detections_target")
+
+# Asegurar tipos numéricos en hiperparámetros
+predict <- predict %>%
+  mutate(
+    min_area = as.numeric(as.character(min_area)),
+    min_frames = as.numeric(as.character(min_frames)),
+    var_threshold = as.numeric(as.character(var_threshold)),
+    history = as.numeric(as.character(history))
+  )
+
+# Crear combo_vec (lista) y combo_label (cadena "[a, b, c, d]")
+predict <- predict %>%
+  mutate(
+    combo_vec = pmap(list(min_area, min_frames, var_threshold, history), ~ c(..1, ..2, ..3, ..4)),
+    combo_label = paste0("[", min_area, ", ", min_frames, ", ", var_threshold, ", ", history, "]")
+  )
+
+# Pivotar targets y predicciones a formato largo y unir por video+metric
+labels_long <- labels %>%
+  pivot_longer(cols = c(up_count_target, down_count_target, num_detections_target),
+               names_to = "metric", values_to = "target") %>%
+  mutate(metric = sub("_target$", "", metric))
+
+res_long <- predict %>%
+  pivot_longer(cols = c(up_count, down_count, num_detections), names_to = "metric", values_to = "value") %>%
+  left_join(labels_long, by = c("video","metric")) %>%
+  # calcular diferencia pareada
+  mutate(diff = value - target) %>%
+  filter(!is.na(diff))   # conservar solo pares válidos
+
+message("Pares válidos totales: ", nrow(res_long))
+
+```
+
+Si hubiera demasiadas combinaciones no las mostramos todas (hay 16 en nuestro caso).
+
+```{r}
+# Ajustes que puedes cambiar
+max_combos_display <- 16   # si hay muchas combinaciones, mostrar solo las top N por tamaño de muestra
+top_by <- "n"              # "n" (más pares) o "median_abs" (mayor mediana absoluta de diff)
+
+```
+
+## Análisis visual
+
+Mostramos los histogramas, los gráficos QQ y los diagramas de caja y bigote para las distribuciones pareadas dadas por la diferencia del valor real menos el valor estimado por el algoritmo para cada combiación de hiperparámetros.
+
+```{r}
+metrics <- unique(res_long$metric)
+
+for(metric_name in metrics){
+
+  d_metric <- res_long %>% filter(metric == metric_name)
+
+  # elegir combos a mostrar
+  combos_stats <- d_metric %>%
+    group_by(combo_label) %>%
+    summarize(
+      n = n(),
+      median_abs = median(abs(diff), na.rm = TRUE),
+      med = median(diff, na.rm = TRUE)
+    ) %>%
+    arrange(desc(!!sym(top_by)))
+
+  display_combos <- combos_stats %>%
+    slice_head(n = max_combos_display) %>%
+    pull(combo_label)
+
+  # --- dividir combos en grupos de 4 ---
+  combo_groups <- split(display_combos, ceiling(seq_along(display_combos) / 4))
+
+  # --- recorrer cada grupo de 4 combos ---
+  for(i in seq_along(combo_groups)){
+
+    group_combos <- combo_groups[[i]]
+
+    d_plot <- d_metric %>%
+      filter(combo_label %in% group_combos) %>%
+      mutate(combo_label = fct_relevel(combo_label, group_combos))
+
+    n_panels <- length(group_combos)
+    n_cols <- ceiling(sqrt(n_panels))
+
+    # --- Histogramas ---
+    p_hist <- ggplot(d_plot, aes(x = diff)) +
+      geom_histogram(bins = 25, fill = "#69b3a2", color = "white") +
+      facet_wrap(~ combo_label, scales = "free_x", ncol = n_cols) +
+      labs(
+        title = paste("Histogramas —", metric_name, "(grupo", i, ")"),
+        x = "diff", y = "count"
+      ) +
+      theme_minimal(base_size = 14)
+    print(p_hist)
+
+    # --- Q-Q plots ---
+    p_qq <- ggplot(d_plot, aes(sample = diff)) +
+      stat_qq(size = 0.8) +
+      stat_qq_line(color = "red") +
+      facet_wrap(~ combo_label, scales = "free", ncol = n_cols) +
+      labs(
+        title = paste("Q-Q plots —", metric_name, "(grupo", i, ")"),
+        x = "Theoretical", y = "Sample"
+      ) +
+      theme_minimal(base_size = 14)
+    print(p_qq)
+
+    # --- Boxplots ---
+    p_box <- ggplot(d_plot, aes(x = combo_label, y = diff)) +
+      geom_boxplot(fill = "#4C9BD8", outlier.size = 0.6, alpha = 0.7) +
+      geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+      facet_wrap(~ combo_label, scales = "free", ncol = n_cols) +
+      theme_minimal(base_size = 14) +
+      labs(
+        title = paste("Boxplots —", metric_name, "(grupo", i, ")"),
+        x = "", y = "diff (pred - label)"
+      )
+    print(p_box)
+
+  } # fin del sub‑bucle de grupos
+}
+
+```
+Las gráficas muestran como, en su mayoría, se presentan asimetrías para las tres métricas. Por su parte, tanto para up_count como down_count, la mayoría de observaciones se encuentran entorno al cero, sugiriendo un buen comportamiento del algoritmo.
+
+## Estimación de la diferencia
+
+Primeramente vamos a comprobar si las diferencias son compatibles con distribuciones normales al 95%.
+
+```{r}
+shapiro_tbl <- res_long %>%
+  group_by(metric, combo_label) %>%
+  summarize(
+    n = n(),
+    shapiro_p = if(n >= 3 & n <= 5000) tryCatch(shapiro.test(diff)$p.value, error = function(e) NA_real_) else NA_real_,
+    .groups = "drop"
+  ) %>%
+  arrange(metric, desc(n))
+
+# Asegúrate de tener dplyr cargado
+library(dplyr)
+
+# Mostrar solo las columnas solicitadas usando el espacio de nombres para evitar conflictos
+shapiro_tbl %>%
+  dplyr::select(combo_label, metric, n, shapiro_p) %>%
+  dplyr::arrange(metric, desc(n)) %>%
+  knitr::kable(digits = 4)
+
+```
+
+Lamentablemente vemos que hay evidencia empírica en contra de la hipótesis nula en la mayoría de los casos. No obstante, como para cada combinación tenermos 38 observaciones (>30) el Teorema Central del Límite nos permite aplicar el ttest para estimar la media de la diferencia al 95%.
+
+```{r}
+ttest_tbl <- res_long %>%
+  group_by(metric, combo_label) %>%
+  summarize(
+    n = n(),
+    mean_diff = mean(diff, na.rm = TRUE),
+    sd_diff = sd(diff, na.rm = TRUE),
+    ttest = list(tryCatch(t.test(value, target, paired = TRUE), error = function(e) NULL)),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    t_stat = map_dbl(ttest, ~ if(!is.null(.x)) as.numeric(.x$statistic) else NA_real_),
+    p_value = map_dbl(ttest, ~ if(!is.null(.x)) as.numeric(.x$p.value) else NA_real_),
+    conf_low = map_dbl(ttest, ~ if(!is.null(.x)) as.numeric(.x$conf.int[1]) else NA_real_),
+    conf_high = map_dbl(ttest, ~ if(!is.null(.x)) as.numeric(.x$conf.int[2]) else NA_real_)
+  ) %>%
+  dplyr::select(metric, combo_label, n, mean_diff, sd_diff, t_stat, p_value, conf_low, conf_high) %>%
+  dplyr::arrange(metric, p_value)
+
+# Mostrar tabla resumida (columnas solicitadas)
+ttest_tbl %>%
+  dplyr::select(combo_label, metric, t_stat, p_value, mean_diff, conf_low, conf_high) %>%
+  dplyr::arrange(metric, p_value) %>%
+  knitr::kable(digits = 4)
+
+```
+
+Visualizando gráficamente los resultados:
+
+```{r}
+# Para cada métrica, ordenar combos por mean_diff y plotear IC
+metrics <- unique(ttest_tbl$metric)
+for(metric_name in metrics){
+  d <- ttest_tbl %>% filter(metric == metric_name) %>% arrange(mean_diff)
+  # si hay muchas combos, limitar a top N por n o por MAE; aquí mostramos todas pero puedes filtrar
+  d <- d %>% mutate(combo_label = fct_reorder(combo_label, mean_diff))
+  p <- ggplot(d, aes(x = combo_label, y = mean_diff)) +
+    geom_pointrange(aes(ymin = conf_low, ymax = conf_high), color = "#2C3E50") +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+    coord_flip() +
+    theme_minimal(base_size = 12) +
+    labs(title = paste("Intervalos de confianza de la media de la diferencia —", metric_name),
+         x = "Combinación [min_area, min_frames, var_threshold, history]",
+         y = "Media de la diferencia (pred - label) with 95% CI")
+  print(p)
+}
+
+```
+
+## Obtención de la mejor combinación
+
+Se ha aplicado el siguiente criterio:
+
+1)  Cero debe pertenecer al IC tanto de up_count como de down_count.
+
+2)  Se toma aquel que minimiza la anchura de los IC.
+
+3)  En caso de empate, se minimiza la desviación típica muestral.
+
+Nótese que como para num_detections los errores son tan grandes en términos absolutos, vamos a dejar fuera del criterio de elección a esta métrica.
+
+```{r}
+metrics_inout <- c("up_count", "down_count")
+
+ttest_ci <- ttest_tbl %>%
+  mutate(
+    ci_width        = conf_high - conf_low,
+    ci_contains_zero = conf_low <= 0 & conf_high >= 0
+  )
+
+combo_params <- predict %>%
+  distinct(combo_label, min_area, min_frames, var_threshold, history)
+
+combo_eval <- ttest_ci %>%
+  # nos quedamos solo con in/out para el criterio de precisión
+  filter(metric %in% metrics_inout) %>%
+  group_by(combo_label) %>%
+  summarize(
+    n_total_inout  = sum(n),
+    both_ci_ok     = all(ci_contains_zero),
+    mean_ci_width  = mean(ci_width, na.rm = TRUE),
+    mean_sd_diff   = mean(sd_diff, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  # exigimos que in y out tengan IC que contengan 0
+  filter(both_ci_ok) %>%
+  arrange(mean_ci_width, mean_sd_diff, desc(n_total_inout)) %>%
+  left_join(combo_params, by = "combo_label")
+
+best_combo <- combo_eval %>% slice(1)
+
+# Mejor combinación según IC y precisión en in/out
+best_combo %>%
+  dplyr::select(
+    combo_label,
+    min_area, min_frames, var_threshold, history,
+    n_total_inout, mean_ci_width, mean_sd_diff
+  ) %>%
+  knitr::kable(digits = 4)
+
+# Top 10 combinaciones\
+combo_eval %>%
+  dplyr::select(
+    combo_label,
+    min_area, min_frames, var_threshold, history,
+    n_total_inout, mean_ci_width, mean_sd_diff
+  ) %>%
+  slice_head(n = 10) %>%
+  knitr::kable(digits = 4)
+
+```
+
+Mostramos gráficamente la elección efectuada, incluido su comportamiento para la métrica num_detections. Por fortuna, de las combinaciones que son buenas para las dos primeras métricas primeras, la elegida es la mejor también para la tercera.
+
+```{r}
+# --- Plot de IC solo para el TOP 10, resaltando la mejor combinación ---
+
+best_label <- best_combo$combo_label
+top10_labels <- combo_eval %>% slice_head(n = 10) %>% pull(combo_label)
+
+metrics <- unique(ttest_tbl$metric)
+
+for(metric_name in metrics){
+
+  d <- ttest_tbl %>%
+    filter(metric == metric_name,
+           combo_label %in% top10_labels) %>%
+    arrange(mean_diff) %>%
+    mutate(
+      combo_label = fct_reorder(combo_label, mean_diff),
+      highlight = combo_label == best_label
+    )
+
+  p <- ggplot(d, aes(x = combo_label, y = mean_diff)) +
+    geom_pointrange(
+      aes(ymin = conf_low, ymax = conf_high,
+          color = highlight, size = highlight)
+    ) +
+    scale_color_manual(values = c("FALSE" = "#2C3E50", "TRUE" = "#E74C3C")) +
+    scale_size_manual(values = c("FALSE" = 0.6, "TRUE" = 1.2)) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+    coord_flip() +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "none") +
+    labs(
+      title = paste("IC del sesgo (pred - label) —", metric_name),
+      subtitle = "Solo TOP 10 según criterio in/out — la mejor combinación va en rojo",
+      x = "Combinación [min_area, min_frames, var_threshold, history]",
+      y = "Media de la diferencia con IC 95%"
+    )
+
+  print(p)
+}
+
+best_raw_material <- best_combo
+res_long_raw <- res_long
+```
+
+# Análisis sobre vídeos con franja blanca
+
+Cargamos los datos. Son una mezcla de 31 vídeos con franja blanca nocturnos y diurnos.
+
+```{r}
+# Ajusta los nombres de archivo si hace falta
+labels_file   <- "ant_videos_labels_white.csv"                 # separador ;
+predict_file  <- "grid_results_20260518_194907.csv"     # separador ,
+
+# Leer archivos
+labels  <- read_delim(labels_file, delim = ";", col_types = cols())
+predict <- read_csv(predict_file, col_types = cols())
+
+# Normalizar nombres esperados (ajusta si tus archivos difieren)
+colnames(predict)[1:8] <- c("video","min_area","min_frames","var_threshold","history","up_count","down_count","num_detections")
+colnames(labels)[1:4]  <- c("video","up_count_target","down_count_target","num_detections_target")
+
+# Asegurar tipos numéricos en hiperparámetros
+predict <- predict %>%
+  mutate(
+    min_area = as.numeric(as.character(min_area)),
+    min_frames = as.numeric(as.character(min_frames)),
+    var_threshold = as.numeric(as.character(var_threshold)),
+    history = as.numeric(as.character(history))
+  )
+
+# Crear combo_vec (lista) y combo_label (cadena "[a, b, c, d]")
+predict <- predict %>%
+  mutate(
+    combo_vec = pmap(list(min_area, min_frames, var_threshold, history), ~ c(..1, ..2, ..3, ..4)),
+    combo_label = paste0("[", min_area, ", ", min_frames, ", ", var_threshold, ", ", history, "]")
+  )
+
+# Pivotar targets y predicciones a formato largo y unir por video+metric
+labels_long <- labels %>%
+  pivot_longer(cols = c(up_count_target, down_count_target, num_detections_target),
+               names_to = "metric", values_to = "target") %>%
+  mutate(metric = sub("_target$", "", metric))
+
+res_long <- predict %>%
+  pivot_longer(cols = c(up_count, down_count, num_detections), names_to = "metric", values_to = "value") %>%
+  left_join(labels_long, by = c("video","metric")) %>%
+  # calcular diferencia pareada
+  mutate(diff = value - target) %>%
+  filter(!is.na(diff))   # conservar solo pares válidos
+
+message("Pares válidos totales: ", nrow(res_long))
+
+```
+
+Si hubiera demasiadas combinaciones no las mostramos todas (hay 16 en nuestro caso).
+
+```{r}
+# Ajustes que puedes cambiar
+max_combos_display <- 16   # si hay muchas combinaciones, mostrar solo las top N por tamaño de muestra
+top_by <- "n"              # "n" (más pares) o "median_abs" (mayor mediana absoluta de diff)
+
+```
+
+## Análisis visual
+
+Mostramos los histogramas, los gráficos QQ y los diagramas de caja y bigote para las distribuciones pareadas dadas por la diferencia del valor real menos el valor estimado por el algoritmo para cada combiación de hiperparámetros.
+
+```{r}
+metrics <- unique(res_long$metric)
+
+for(metric_name in metrics){
+
+  d_metric <- res_long %>% filter(metric == metric_name)
+
+  # elegir combos a mostrar
+  combos_stats <- d_metric %>%
+    group_by(combo_label) %>%
+    summarize(
+      n = n(),
+      median_abs = median(abs(diff), na.rm = TRUE),
+      med = median(diff, na.rm = TRUE)
+    ) %>%
+    arrange(desc(!!sym(top_by)))
+
+  display_combos <- combos_stats %>%
+    slice_head(n = max_combos_display) %>%
+    pull(combo_label)
+
+  # --- dividir combos en grupos de 4 ---
+  combo_groups <- split(display_combos, ceiling(seq_along(display_combos) / 4))
+
+  # --- recorrer cada grupo de 4 combos ---
+  for(i in seq_along(combo_groups)){
+
+    group_combos <- combo_groups[[i]]
+
+    d_plot <- d_metric %>%
+      filter(combo_label %in% group_combos) %>%
+      mutate(combo_label = fct_relevel(combo_label, group_combos))
+
+    n_panels <- length(group_combos)
+    n_cols <- ceiling(sqrt(n_panels))
+
+    # --- Histogramas ---
+    p_hist <- ggplot(d_plot, aes(x = diff)) +
+      geom_histogram(bins = 25, fill = "#69b3a2", color = "white") +
+      facet_wrap(~ combo_label, scales = "free_x", ncol = n_cols) +
+      labs(
+        title = paste("Histogramas —", metric_name, "(grupo", i, ")"),
+        x = "diff", y = "count"
+      ) +
+      theme_minimal(base_size = 14)
+    print(p_hist)
+
+    # --- Q-Q plots ---
+    p_qq <- ggplot(d_plot, aes(sample = diff)) +
+      stat_qq(size = 0.8) +
+      stat_qq_line(color = "red") +
+      facet_wrap(~ combo_label, scales = "free", ncol = n_cols) +
+      labs(
+        title = paste("Q-Q plots —", metric_name, "(grupo", i, ")"),
+        x = "Theoretical", y = "Sample"
+      ) +
+      theme_minimal(base_size = 14)
+    print(p_qq)
+
+    # --- Boxplots ---
+    p_box <- ggplot(d_plot, aes(x = combo_label, y = diff)) +
+      geom_boxplot(fill = "#4C9BD8", outlier.size = 0.6, alpha = 0.7) +
+      geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+      facet_wrap(~ combo_label, scales = "free", ncol = n_cols) +
+      theme_minimal(base_size = 14) +
+      labs(
+        title = paste("Boxplots —", metric_name, "(grupo", i, ")"),
+        x = "", y = "diff (pred - label)"
+      )
+    print(p_box)
+
+  } # fin del sub‑bucle de grupos
+}
+
+```
+
+Las gráficas muestran como, en su mayoría, se presentan asimetrías para las tres métricas. Por su parte, tanto para up_count como down_count, la mayoría de observaciones se encuentran entorno al cero, sugiriendo un buen comportamiento del algoritmo.
+
+## Estimación de la diferencia
+
+Primeramente vamos a comprobar si las diferencias son compatibles con distribuciones normales al 95%.
+
+```{r}
+shapiro_tbl <- res_long %>%
+  group_by(metric, combo_label) %>%
+  summarize(
+    n = n(),
+    shapiro_p = if(n >= 3 & n <= 5000) tryCatch(shapiro.test(diff)$p.value, error = function(e) NA_real_) else NA_real_,
+    .groups = "drop"
+  ) %>%
+  arrange(metric, desc(n))
+
+# Asegúrate de tener dplyr cargado
+library(dplyr)
+
+# Mostrar solo las columnas solicitadas usando el espacio de nombres para evitar conflictos
+shapiro_tbl %>%
+  dplyr::select(combo_label, metric, n, shapiro_p) %>%
+  dplyr::arrange(metric, desc(n)) %>%
+  knitr::kable(digits = 4)
+
+```
+
+Lamentablemente vemos que hay evidencia empírica en contra de la hipótesis nula en la mayoría de los casos. No obstante, como para cada combinación tenermos 38 observaciones (>30) el Teorema Central del Límite nos permite aplicar el ttest para estimar la media de la diferencia al 95%.
+
+```{r}
+ttest_tbl <- res_long %>%
+  group_by(metric, combo_label) %>%
+  summarize(
+    n = n(),
+    mean_diff = mean(diff, na.rm = TRUE),
+    sd_diff = sd(diff, na.rm = TRUE),
+    ttest = list(tryCatch(t.test(value, target, paired = TRUE), error = function(e) NULL)),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    t_stat = map_dbl(ttest, ~ if(!is.null(.x)) as.numeric(.x$statistic) else NA_real_),
+    p_value = map_dbl(ttest, ~ if(!is.null(.x)) as.numeric(.x$p.value) else NA_real_),
+    conf_low = map_dbl(ttest, ~ if(!is.null(.x)) as.numeric(.x$conf.int[1]) else NA_real_),
+    conf_high = map_dbl(ttest, ~ if(!is.null(.x)) as.numeric(.x$conf.int[2]) else NA_real_)
+  ) %>%
+  dplyr::select(metric, combo_label, n, mean_diff, sd_diff, t_stat, p_value, conf_low, conf_high) %>%
+  dplyr::arrange(metric, p_value)
+
+# Mostrar tabla resumida (columnas solicitadas)
+ttest_tbl %>%
+  dplyr::select(combo_label, metric, t_stat, p_value, mean_diff, conf_low, conf_high) %>%
+  dplyr::arrange(metric, p_value) %>%
+  knitr::kable(digits = 4)
+
+```
+
+Visualizando gráficamente los resultados:
+
+```{r}
+# Para cada métrica, ordenar combos por mean_diff y plotear IC
+metrics <- unique(ttest_tbl$metric)
+for(metric_name in metrics){
+  d <- ttest_tbl %>% filter(metric == metric_name) %>% arrange(mean_diff)
+  # si hay muchas combos, limitar a top N por n o por MAE; aquí mostramos todas pero puedes filtrar
+  d <- d %>% mutate(combo_label = fct_reorder(combo_label, mean_diff))
+  p <- ggplot(d, aes(x = combo_label, y = mean_diff)) +
+    geom_pointrange(aes(ymin = conf_low, ymax = conf_high), color = "#2C3E50") +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+    coord_flip() +
+    theme_minimal(base_size = 12) +
+    labs(title = paste("Intervalos de confianza de la media de la diferencia —", metric_name),
+         x = "Combinación [min_area, min_frames, var_threshold, history]",
+         y = "Media de la diferencia (pred - label) with 95% CI")
+  print(p)
+}
+
+```
+
+## Obtención de la mejor combinación
+
+Volvemos a aplicar el mismo criterio de selección.
+
+```{r}
+metrics_inout <- c("up_count", "down_count")
+
+ttest_ci <- ttest_tbl %>%
+  mutate(
+    ci_width        = conf_high - conf_low,
+    ci_contains_zero = conf_low <= 0 & conf_high >= 0
+  )
+
+combo_params <- predict %>%
+  distinct(combo_label, min_area, min_frames, var_threshold, history)
+
+combo_eval <- ttest_ci %>%
+  # nos quedamos solo con in/out para el criterio de precisión
+  filter(metric %in% metrics_inout) %>%
+  group_by(combo_label) %>%
+  summarize(
+    n_total_inout  = sum(n),
+    both_ci_ok     = all(ci_contains_zero),
+    mean_ci_width  = mean(ci_width, na.rm = TRUE),
+    mean_sd_diff   = mean(sd_diff, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  # exigimos que in y out tengan IC que contengan 0
+  filter(both_ci_ok) %>%
+  arrange(mean_ci_width, mean_sd_diff, desc(n_total_inout)) %>%
+  left_join(combo_params, by = "combo_label")
+
+best_combo <- combo_eval %>% slice(1)
+
+# Mejor combinación según IC y precisión en in/out
+best_combo %>%
+  dplyr::select(
+    combo_label,
+    min_area, min_frames, var_threshold, history,
+    n_total_inout, mean_ci_width, mean_sd_diff
+  ) %>%
+  knitr::kable(digits = 4)
+
+# Top 10 combinaciones\
+combo_eval %>%
+  dplyr::select(
+    combo_label,
+    min_area, min_frames, var_threshold, history,
+    n_total_inout, mean_ci_width, mean_sd_diff
+  ) %>%
+  slice_head(n = 10) %>%
+  knitr::kable(digits = 4)
+
+```
+
+Mostramos gráficamente la elección efectuada, incluido su comportamiento para la métrica num_detections. Por fortuna, de las combinaciones que son buenas para las dos primeras métricas, la elegida es la mejor también para la tercera.
+
+```{r}
+# --- Plot de IC solo para el TOP 10, resaltando la mejor combinación ---
+
+best_label <- best_combo$combo_label
+top10_labels <- combo_eval %>% slice_head(n = 10) %>% pull(combo_label)
+
+metrics <- unique(ttest_tbl$metric)
+
+for(metric_name in metrics){
+
+  d <- ttest_tbl %>%
+    filter(metric == metric_name,
+           combo_label %in% top10_labels) %>%
+    arrange(mean_diff) %>%
+    mutate(
+      combo_label = fct_reorder(combo_label, mean_diff),
+      highlight = combo_label == best_label
+    )
+
+  p <- ggplot(d, aes(x = combo_label, y = mean_diff)) +
+    geom_pointrange(
+      aes(ymin = conf_low, ymax = conf_high,
+          color = highlight, size = highlight)
+    ) +
+    scale_color_manual(values = c("FALSE" = "#2C3E50", "TRUE" = "#E74C3C")) +
+    scale_size_manual(values = c("FALSE" = 0.6, "TRUE" = 1.2)) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+    coord_flip() +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "none") +
+    labs(
+      title = paste("IC del sesgo (pred - label) —", metric_name),
+      subtitle = "Solo TOP 10 según criterio in/out — la mejor combinación va en rojo",
+      x = "Combinación [min_area, min_frames, var_threshold, history]",
+      y = "Media de la diferencia con IC 95%"
+    )
+
+  print(p)
+}
+
+best_white_material <- best_combo
+res_long_white <- res_long
+```
+
+# Conclusión
+
+Comparando ambas posibilidades vemos cómo no hay evidencia, con una significancia de 0.95, en contra de la hipótesis de que tienen igual media. Por lo tanto concluimos que no aporta una mejora estadísticamente significativa pintar los troncos de los árboles de blanco.
+```{r}
+metrics_inout <- c("up_count", "down_count")
+
+results_tests <- lapply(metrics_inout, function(m){
+
+  d_raw <- res_long_raw  %>% filter(metric == m, combo_label == best_raw_material$combo_label)
+  d_white <- res_long_white %>% filter(metric == m, combo_label == best_white_material$combo_label)
+
+  # t-test (no pareado)
+  t_res <- t.test(d_raw$diff, d_white$diff, paired = FALSE)
+
+
+  tibble(
+    metric = m,
+    n_raw = nrow(d_raw),
+    n_white = nrow(d_white),
+    mean_raw = mean(d_raw$diff),
+    mean_white = mean(d_white$diff),
+    t_stat = t_res$statistic,
+    t_pvalue = t_res$p.value,
+    t_conf_low = t_res$conf.int[1],
+    t_conf_high = t_res$conf.int[2],
+  )
+}) %>% bind_rows()
+
+results_tests
+
+
+```
