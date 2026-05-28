@@ -21,7 +21,7 @@ scripts/
     └── modify_dataset.py
 
 models/
-└── ant_yolov8x.pt
+└── model_link.txt
 
 R_analysis/
 ├── bgsub_fine_tuning.Rmd
@@ -68,8 +68,8 @@ Script generado con Copilot para **modificar datasets YOLO**, permitiendo elimin
 
 ## 🧠 `models/`
 
-### **`ant_yolov8x.pt`**
-Modelo YOLOv8x entrenado para la **detección de hormigas en vídeos de alta calidad**.
+### **`model_link.txt`**
+Enlace al modelo YOLOv8x **ant_yolov8x.pt**, entrenado para la **detección de hormigas en vídeos de alta calidad**.
 
 ---
 
