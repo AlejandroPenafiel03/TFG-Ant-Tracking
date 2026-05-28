@@ -59,7 +59,7 @@ Módulo que implementa diferentes métodos de autoetiquetado:
 ## 🛠️ `scripts/dataset_modification/`
 
 ### **`modify_dataset.py`**
-Script generado con Copilot para **modificar datasets YOLO**, permitiendo reorganizar o reducir clases hasta un máximo de 10.
+Script generado con Copilot para **modificar datasets YOLO**, permitiendo eliminar, añadir o modificar bounding boxes, con hasta un máximo de 10 clases.
 
 ---
 
